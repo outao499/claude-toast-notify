@@ -10,7 +10,7 @@ when a task completes.
 ## Screenshots
 
 ![Permission popup](./screenshots/512cbe4019287e10663f18bcbb07841f.png)
-![Toast balloon](./screenshots/693468169f4a70eb8fbfcd4238df5ecf.png)
+![Toast balloon](./screenshots/f493a43cd8beadfd23219ecaeb315da9.png)
 
 ## Features
 
