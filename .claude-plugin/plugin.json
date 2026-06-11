@@ -1,0 +1,16 @@
+{
+  "name": "claude-toast-notify",
+  "description": "Windows toast and permission popup notifications for Claude Code hooks",
+  "version": "0.1.0",
+  "author": {
+    "name": "claude-toast-notify"
+  },
+  "license": "MIT",
+  "keywords": [
+    "notifications",
+    "toast",
+    "windows",
+    "hooks",
+    "claude-code"
+  ]
+}
