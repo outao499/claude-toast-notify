@@ -25,28 +25,35 @@ when a task completes.
 
 ## Installation
 
-1. Clone or download this repository:
+### Method 1: Install via GitHub (recommended)
 
-   ```powershell
-   git clone https://github.com/outao499/claude-toast-notify.git
-   ```
+Run these two commands inside Claude Code:
 
-2. Add the plugin to Claude Code's `settings.json`:
+```
+/plugin marketplace add outao499/claude-toast-notify
+/plugin install claude-toast-notify@claude-toast-notify
+```
 
-   ```json
-   "extraKnownMarketplaces": {
-     "claude-toast-notify": {
-       "source": {
-         "path": "C:\\path\\to\\claude-toast-notify",
-         "source": "directory"
-       }
-     }
-   }
-   ```
+Restart Claude Code and you're done.
 
-3. Restart Claude Code. The plugin will be installed automatically from the local marketplace.
+### Method 2: One-click install script
 
-   > Or simply copy `scripts/claude_toast_notify.ps1` and `hooks/hooks.json` into your own Claude Code plugin structure.
+Run this in PowerShell (as administrator):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -c "iex (Invoke-RestMethod https://raw.githubusercontent.com/outao499/claude-toast-notify/main/install.ps1)"
+```
+
+The script downloads the plugin and configures Claude Code automatically.
+
+### Method 3: Manual install
+
+Clone the repo, then inside Claude Code run:
+
+```
+/plugin marketplace add C:\path\to\claude-toast-notify
+/plugin install claude-toast-notify@claude-toast-notify
+```
 
 ## How It Works
 

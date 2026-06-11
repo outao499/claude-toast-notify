@@ -1,0 +1,15 @@
+{
+  "name": "claude-toast-notify",
+  "description": "Windows toast and permission popup notifications for Claude Code",
+  "plugins": [
+    {
+      "name": "claude-toast-notify",
+      "description": "Windows toast and permission popup notifications for Claude Code hooks",
+      "version": "0.1.0",
+      "source": "./",
+      "author": {
+        "name": "claude-toast-notify"
+      }
+    }
+  ]
+}

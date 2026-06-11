@@ -24,28 +24,35 @@ Claude Code 的 Windows Toast 通知和权限弹窗插件。
 
 ## 安装
 
-1. 克隆或下载本仓库：
+### 方法一：从 GitHub 直接安装（推荐）
 
-   ```powershell
-   git clone https://github.com/outao499/claude-toast-notify.git
-   ```
+在 Claude Code 中运行以下两条命令：
 
-2. 在 Claude Code 的 `settings.json` 中添加本地市场源：
+```
+/plugin marketplace add outao499/claude-toast-notify
+/plugin install claude-toast-notify@claude-toast-notify
+```
 
-   ```json
-   "extraKnownMarketplaces": {
-     "claude-toast-notify": {
-       "source": {
-         "path": "C:\\path\\to\\claude-toast-notify",
-         "source": "directory"
-       }
-     }
-   }
-   ```
+重启 Claude Code 后自动生效。
 
-3. 重启 Claude Code，插件会自动安装。
+### 方法二：一键安装脚本
 
-   > 也可直接将 `scripts/claude_toast_notify.ps1` 和 `hooks/hooks.json` 复制到你的 Claude Code 插件目录中。
+以管理员身份打开 PowerShell，运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -c "iex (Invoke-RestMethod https://raw.githubusercontent.com/outao499/claude-toast-notify/main/install.ps1)"
+```
+
+脚本会自动下载插件并配置 Claude Code 设置。
+
+### 方法三：手动安装
+
+克隆仓库后，在 Claude Code 中运行：
+
+```
+/plugin marketplace add C:\path\to\claude-toast-notify
+/plugin install claude-toast-notify@claude-toast-notify
+```
 
 ## 工作原理
 
