@@ -1,6 +1,9 @@
 {
   "name": "claude-toast-notify",
   "description": "Windows toast and permission popup notifications for Claude Code",
+  "owner": {
+    "name": "outao499"
+  },
   "plugins": [
     {
       "name": "claude-toast-notify",
@@ -8,7 +11,7 @@
       "version": "0.1.0",
       "source": "./",
       "author": {
-        "name": "claude-toast-notify"
+        "name": "outao499"
       }
     }
   ]
