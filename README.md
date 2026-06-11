@@ -8,8 +8,8 @@ Claude Code 的 Windows Toast 通知和权限弹窗插件。
 
 ## 效果
 
-![权限弹窗](./screenshots/popup.png)
-![气泡通知](./screenshots/balloon.png)
+![权限弹窗](./screenshots/512cbe4019287e10663f18bcbb07841f.png)
+![气泡通知](./screenshots/693468169f4a70eb8fbfcd4238df5ecf.png)
 
 ## 功能
 

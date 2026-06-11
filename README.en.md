@@ -9,8 +9,8 @@ when a task completes.
 
 ## Screenshots
 
-![Permission popup](./screenshots/popup.png)
-![Toast balloon](./screenshots/balloon.png)
+![Permission popup](./screenshots/512cbe4019287e10663f18bcbb07841f.png)
+![Toast balloon](./screenshots/693468169f4a70eb8fbfcd4238df5ecf.png)
 
 ## Features
 

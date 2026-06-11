@@ -156,7 +156,7 @@ if ($PayloadFile -and (Test-Path -LiteralPath $PayloadFile)) {
         $stdinInput = Get-Content -LiteralPath $PayloadFile -Raw -Encoding UTF8
         Remove-Item -LiteralPath $PayloadFile -Force -ErrorAction SilentlyContinue
     } catch {}
-} else {
+} elseif ([Console]::IsInputRedirected) {
     try { $stdinInput = [Console]::In.ReadToEnd() } catch {}
 }
 if ($stdinInput -and $stdinInput.Length -gt 0) {
