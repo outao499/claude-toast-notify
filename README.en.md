@@ -1,5 +1,7 @@
 # claude-toast-notify
 
+[![GitHub Release](https://img.shields.io/github/v/release/outao499/claude-toast-notify)](https://github.com/outao499/claude-toast-notify/releases)
+
 [中文文档](./README.md)
 
 Windows toast and permission popup notifications for [Claude Code](https://claude.ai).

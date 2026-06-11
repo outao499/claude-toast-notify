@@ -1,5 +1,7 @@
 # claude-toast-notify
 
+[![GitHub Release](https://img.shields.io/github/v/release/outao499/claude-toast-notify)](https://github.com/outao499/claude-toast-notify/releases)
+
 [English](./README.en.md)
 
 Claude Code 的 Windows Toast 通知和权限弹窗插件。
