@@ -7,6 +7,11 @@ Windows toast and permission popup notifications for [Claude Code](https://claud
 Displays a popup when Claude Code requests tool permissions, and a toast balloon
 when a task completes.
 
+## Screenshots
+
+![Permission popup](./screenshots/popup.png)
+![Toast balloon](./screenshots/balloon.png)
+
 ## Features
 
 - **Permission popup** — centered window with tool name/args and a "确定" button

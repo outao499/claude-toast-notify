@@ -6,6 +6,11 @@ Claude Code 的 Windows Toast 通知和权限弹窗插件。
 
 在 Claude Code 请求工具权限时显示居中弹窗，在任务完成时显示右下角气泡通知。
 
+## 效果
+
+![权限弹窗](./screenshots/popup.png)
+![气泡通知](./screenshots/balloon.png)
+
 ## 功能
 
 - **权限弹窗** — 居中窗口，显示工具名称和参数，带"确定"按钮
