@@ -51,31 +51,35 @@ public class Win32Save {
     $instanceHandleFile = Join-Path $sessionDir "terminal_handle.txt"
     [DateTimeOffset]::Now.ToUnixTimeSeconds() | Out-File $instanceTimeFile -Encoding ascii
 
-    $handle = [Win32Save]::GetForegroundWindow()
-    if ($handle -ne [IntPtr]::Zero) {
-        $fgPid = [uint32]0
-        [Win32Save]::GetWindowThreadProcessId($handle, [ref]$fgPid) | Out-Null
-        if ($fgPid -gt 0) {
-            try {
-                $fgProc = Get-Process -Id $fgPid -ErrorAction SilentlyContinue
-                if ($fgProc.ProcessName -in @("powershell", "pwsh", "conhost", "cmd")) {
-                    $handle = [IntPtr]::Zero
-                }
-            } catch {}
-        }
-    }
-    if ($handle -eq [IntPtr]::Zero) {
-        try { $handle = [Win32Save]::GetConsoleWindow() } catch {}
-    }
-    if ($handle -eq [IntPtr]::Zero) {
-        $names = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
+    # Walk parent process chain to find the terminal that launched this Claude Code instance
+    $handle = [IntPtr]::Zero
+    $pidCursor = $global:pid
+    $seen = @{}
+    $termNames = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
                    "ConEmu64", "ConEmu", "OpenConsole", "conhost",
                    "pwsh", "powershell", "cmd",
                    "idea64", "idea", "jetbrains", "devecostudio64",
                    "code", "Code",
                    "hyper", "alacritty", "tabby", "mintty",
                    "FluentTerminal", "MobaXterm", "putty", "kitty")
-        foreach ($name in $names) {
+    while ($pidCursor -gt 0 -and -not $seen.ContainsKey($pidCursor)) {
+        $seen[$pidCursor] = $true
+        try {
+            $proc = Get-Process -Id $pidCursor -ErrorAction SilentlyContinue
+            if ($null -ne $proc -and $proc.ProcessName -in $termNames -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                $handle = $proc.MainWindowHandle
+                break
+            }
+            $wmi = Get-WmiObject Win32_Process -Filter "ProcessId = $pidCursor" -ErrorAction SilentlyContinue
+            if (-not $wmi) { break }
+            $pidCursor = $wmi.ParentProcessId
+        } catch { break }
+    }
+    if ($handle -eq [IntPtr]::Zero) {
+        try { $handle = [Win32Save]::GetConsoleWindow() } catch {}
+    }
+    if ($handle -eq [IntPtr]::Zero) {
+        foreach ($name in $termNames) {
             try {
                 $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
                     Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
@@ -318,32 +322,36 @@ try {
 
 # ── Show notification ──
 function Find-TerminalWindow {
-    $names = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
-               "ConEmu64", "ConEmu", "OpenConsole", "conhost",
-               "pwsh", "powershell", "cmd",
-               "idea64", "idea", "jetbrains", "devecostudio64",
-               "code", "Code",
-               "hyper", "alacritty", "tabby", "mintty",
-               "FluentTerminal", "MobaXterm", "putty", "kitty")
-    foreach ($name in $names) {
-        try {
-            $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
-                Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
-                Sort-Object StartTime -Descending | Select-Object -First 1
-            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { return $proc.MainWindowHandle }
-        } catch {}
-    }
+    $termNames = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
+                   "ConEmu64", "ConEmu", "OpenConsole", "conhost",
+                   "pwsh", "powershell", "cmd",
+                   "idea64", "idea", "jetbrains", "devecostudio64",
+                   "code", "Code",
+                   "hyper", "alacritty", "tabby", "mintty",
+                   "FluentTerminal", "MobaXterm", "putty", "kitty")
+    # Walk parent chain to find the terminal that launched this Claude Code instance
     $pidCursor = $global:pid
     $seen = @{}
     while ($pidCursor -gt 0 -and -not $seen.ContainsKey($pidCursor)) {
         $seen[$pidCursor] = $true
         try {
             $proc = Get-Process -Id $pidCursor -ErrorAction SilentlyContinue
-            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { return $proc.MainWindowHandle }
+            if ($null -ne $proc -and $proc.ProcessName -in $termNames -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                return $proc.MainWindowHandle
+            }
             $wmi = Get-WmiObject Win32_Process -Filter "ProcessId = $pidCursor" -ErrorAction SilentlyContinue
             if (-not $wmi) { break }
             $pidCursor = $wmi.ParentProcessId
         } catch { break }
+    }
+    # Fallback: global search for any terminal window (newest first)
+    foreach ($name in $termNames) {
+        try {
+            $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+                Sort-Object StartTime -Descending | Select-Object -First 1
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { return $proc.MainWindowHandle }
+        } catch {}
     }
     try {
         $consoleHwnd = [Win32]::GetConsoleWindow()

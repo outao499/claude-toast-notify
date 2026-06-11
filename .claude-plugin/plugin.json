@@ -1,7 +1,7 @@
 {
   "name": "claude-toast-notify",
   "description": "Windows toast and permission popup notifications for Claude Code hooks",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "claude-toast-notify"
   },
