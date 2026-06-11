@@ -69,6 +69,21 @@ On the `PermissionRequest` popup or the balloon, clicking activates the terminal
 window using a three-layer strategy: saved handle → process name search →
 `GetConsoleWindow()`.
 
+## Updating
+
+When a new version is released, run inside Claude Code:
+
+```
+/plugin marketplace update claude-toast-notify
+claude plugin update claude-toast-notify@claude-toast-notify
+```
+
+Or re-run the install script:
+
+```powershell
+iex (Invoke-RestMethod https://raw.githubusercontent.com/outao499/claude-toast-notify/main/install.ps1)
+```
+
 ## Testing
 
 ```powershell

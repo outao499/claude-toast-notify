@@ -66,6 +66,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -c "iex (Invoke-RestMethod https:/
 
 点击弹窗或气泡时，通过三层策略激活终端窗口：已保存句柄 → 进程名搜索 → `GetConsoleWindow()`。
 
+## 更新
+
+有新版本时，在 Claude Code 中运行：
+
+```
+/plugin marketplace update claude-toast-notify
+claude plugin update claude-toast-notify@claude-toast-notify
+```
+
+或者重新运行安装脚本：
+
+```powershell
+iex (Invoke-RestMethod https://raw.githubusercontent.com/outao499/claude-toast-notify/main/install.ps1)
+```
+
 ## 测试
 
 ```powershell
