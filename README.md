@@ -1,5 +1,7 @@
 # claude-toast-notify
 
+[中文文档](./README.zh.md)
+
 Windows toast and permission popup notifications for [Claude Code](https://claude.ai).
 
 Displays a popup when Claude Code requests tool permissions, and a toast balloon
@@ -26,7 +28,7 @@ when a task completes.
 1. Clone or download this repository:
 
    ```powershell
-   git clone https://github.com/YOUR_USERNAME/claude-toast-notify.git
+   git clone https://github.com/outao499/claude-toast-notify.git
    ```
 
 2. Add the plugin to Claude Code's `settings.json`:
