@@ -6,21 +6,27 @@
     [string]$PayloadFile = ""
 )
 
-# ── Lightweight init: session directory ──
+# ── Init ──
 $pluginRoot = $env:CLAUDE_PLUGIN_ROOT
 if (-not $pluginRoot) { $pluginRoot = (Get-Item $PSScriptRoot).Parent.FullName }
 $notifyDir = Join-Path $pluginRoot "notify"
 if (-not (Test-Path $notifyDir)) { New-Item -ItemType Directory -Path $notifyDir -Force | Out-Null }
-
 $logFile = Join-Path $notifyDir "claude_notify_debug.log"
 $sessionsDir = Join-Path $notifyDir "sessions"
 if (-not (Test-Path $sessionsDir)) { New-Item -ItemType Directory -Path $sessionsDir -Force | Out-Null }
-
 try {
     Get-ChildItem -Path $sessionsDir -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 } catch {}
+
+$termNames = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
+               "ConEmu64", "ConEmu", "OpenConsole", "conhost",
+               "pwsh", "powershell", "cmd",
+               "idea64", "idea", "jetbrains", "devecostudio64",
+               "code", "Code",
+               "hyper", "alacritty", "tabby", "mintty",
+               "FluentTerminal", "MobaXterm", "putty", "kitty")
 
 function Get-ShortHash {
     param([string]$Value)
@@ -32,67 +38,167 @@ function Get-ShortHash {
     } catch { return "default" }
 }
 
-# ── save event: fast path, early exit ──
-if ($Event -eq "save") {
-    Add-Type @"
-using System; using System.Runtime.InteropServices;
-public class Win32Save {
+function Read-HookStdin {
+    $input = ""
+    if ($PayloadFile -and (Test-Path -LiteralPath $PayloadFile)) {
+        try {
+            $input = Get-Content -LiteralPath $PayloadFile -Raw -Encoding UTF8
+            Remove-Item -LiteralPath $PayloadFile -Force -ErrorAction SilentlyContinue
+        } catch {}
+    } elseif ([Console]::IsInputRedirected) {
+        $origEncoding = [Console]::InputEncoding
+        [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+        try { $input = [Console]::In.ReadToEnd() } catch {}
+        [Console]::InputEncoding = $origEncoding
+    }
+    return $input
+}
+
+function Resolve-SessionSource {
+    param([string]$StdinInput)
+    $source = ""
+    if ($StdinInput -and $StdinInput.Length -gt 0) {
+        try {
+            $hookData = $StdinInput | ConvertFrom-Json
+            if ($hookData) {
+                if ($hookData.session_id) { $source = [string]$hookData.session_id }
+                elseif ($hookData.transcript_path) { $source = [string]$hookData.transcript_path }
+                elseif ($hookData.cwd) { $source = [string]$hookData.cwd }
+            }
+        } catch {}
+    }
+    if (-not $source -and $env:CLAUDE_SESSION_ID) { $source = $env:CLAUDE_SESSION_ID }
+    if (-not $source) { $source = (Get-Location).Path }
+    return $source
+}
+
+# ── Add-Type: all Win32 P/Invoke in one place ──
+Add-Type @"
+using System; using System.Runtime.InteropServices; using System.Text;
+public class Win32 {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int dwProcessId);
     [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 }
 "@
-    $sessionSource = $env:CLAUDE_SESSION_ID
-    if (-not $sessionSource) { $sessionSource = (Get-Location).Path }
-    $sessionKey = Get-ShortHash -Value $sessionSource
-    $sessionDir = Join-Path $sessionsDir $sessionKey
-    if (-not (Test-Path $sessionDir)) { New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null }
-    $instanceTimeFile = Join-Path $sessionDir "start_time.txt"
-    $instanceHandleFile = Join-Path $sessionDir "terminal_handle.txt"
-    [DateTimeOffset]::Now.ToUnixTimeSeconds() | Out-File $instanceTimeFile -Encoding ascii
 
-    # Walk parent process chain to find the terminal that launched this Claude Code instance
+# ── Window lookup helpers ──
+
+function Find-WtWindowByTitle {
+    param([string[]]$Titles)
+    if ($Titles.Count -eq 0) { return [IntPtr]::Zero }
+    try {
+        $wtProcs = Get-Process WindowsTerminal -ErrorAction SilentlyContinue
+        if ($null -eq $wtProcs) { return [IntPtr]::Zero }
+        $wtPids = @($wtProcs | ForEach-Object { $_.Id })
+        $script:exactHwnd = [IntPtr]::Zero
+        $script:fuzzyHwnd = [IntPtr]::Zero
+        $callback = [Win32+EnumWindowsProc]{
+            param($hWnd, $lParam)
+            $procIdOut = [uint32]0
+            [Win32]::GetWindowThreadProcessId($hWnd, [ref]$procIdOut) | Out-Null
+            if ($wtPids -contains $procIdOut) {
+                $title = New-Object System.Text.StringBuilder 512
+                [Win32]::GetWindowText($hWnd, $title, 512) | Out-Null
+                $winTitle = "$title"
+                if ($winTitle.Length -eq 0) { return $true }
+                foreach ($mt in $Titles) {
+                    if ($winTitle -eq $mt) {
+                        $script:exactHwnd = $hWnd
+                        return $false
+                    }
+                }
+                if ($script:fuzzyHwnd -eq [IntPtr]::Zero) {
+                    foreach ($mt in $Titles) {
+                        if ($mt.Length -gt 0 -and ($winTitle.Contains($mt) -or $mt.Contains($winTitle))) {
+                            $script:fuzzyHwnd = $hWnd
+                            break
+                        }
+                    }
+                }
+            }
+            return $true
+        }
+        [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+        if ($script:exactHwnd -ne [IntPtr]::Zero) { return $script:exactHwnd }
+        if ($script:fuzzyHwnd -ne [IntPtr]::Zero) { return $script:fuzzyHwnd }
+    } catch {}
+    return [IntPtr]::Zero
+}
+
+function Find-TerminalByProcess {
     $handle = [IntPtr]::Zero
+    # GetConsoleWindow
+    try {
+        $handle = [Win32]::GetConsoleWindow()
+        if ($handle -ne [IntPtr]::Zero) { return $handle }
+    } catch {}
+    # Walk parent chain
     $pidCursor = $global:pid
     $seen = @{}
-    $termNames = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
-                   "ConEmu64", "ConEmu", "OpenConsole", "conhost",
-                   "pwsh", "powershell", "cmd",
-                   "idea64", "idea", "jetbrains", "devecostudio64",
-                   "code", "Code",
-                   "hyper", "alacritty", "tabby", "mintty",
-                   "FluentTerminal", "MobaXterm", "putty", "kitty")
     while ($pidCursor -gt 0 -and -not $seen.ContainsKey($pidCursor)) {
         $seen[$pidCursor] = $true
         try {
             $proc = Get-Process -Id $pidCursor -ErrorAction SilentlyContinue
             if ($null -ne $proc -and $proc.ProcessName -in $termNames -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
-                $handle = $proc.MainWindowHandle
-                break
+                return $proc.MainWindowHandle
             }
             $wmi = Get-WmiObject Win32_Process -Filter "ProcessId = $pidCursor" -ErrorAction SilentlyContinue
             if (-not $wmi) { break }
             $pidCursor = $wmi.ParentProcessId
         } catch { break }
     }
-    if ($handle -eq [IntPtr]::Zero) {
-        try { $handle = [Win32Save]::GetConsoleWindow() } catch {}
+    # Global search
+    foreach ($name in $termNames) {
+        try {
+            $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
+                Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
+                Sort-Object StartTime -Descending | Select-Object -First 1
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { return $proc.MainWindowHandle }
+        } catch {}
     }
-    if ($handle -eq [IntPtr]::Zero) {
-        foreach ($name in $termNames) {
-            try {
-                $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
-                    Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
-                    Sort-Object StartTime -Descending | Select-Object -First 1
-                if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
-                    $handle = $proc.MainWindowHandle
-                    break
-                }
-            } catch {}
-        }
-    }
+    return [IntPtr]::Zero
+}
+
+function Find-TerminalWindow {
+    $consoleTitle = ""
+    try { $consoleTitle = [Console]::Title } catch {}
+    $handle = Find-WtWindowByTitle -Titles @($consoleTitle)
+    if ($handle -ne [IntPtr]::Zero) { return $handle }
+    return Find-TerminalByProcess
+}
+
+# ── save event: fast path, early exit ──
+if ($Event -eq "save") {
+    $stdinInput = Read-HookStdin
+    $sessionSource = Resolve-SessionSource $stdinInput
+    $sessionKey = Get-ShortHash -Value $sessionSource
+    $sessionDir = Join-Path $sessionsDir $sessionKey
+    if (-not (Test-Path $sessionDir)) { New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null }
+    $instanceHandleFile = Join-Path $sessionDir "terminal_handle.txt"
+    [DateTimeOffset]::Now.ToUnixTimeSeconds() | Out-File (Join-Path $sessionDir "start_time.txt") -Encoding ascii
+
+    $consoleTitle = ""
+    try { $consoleTitle = [Console]::Title } catch {}
+    $handle = Find-WtWindowByTitle -Titles @($consoleTitle)
+    if ($handle -eq [IntPtr]::Zero) { $handle = Find-TerminalByProcess }
+
     if ($handle -ne [IntPtr]::Zero) {
         $handle.ToInt64() | Out-File $instanceHandleFile -Encoding ascii
+    }
+    if ($consoleTitle) {
+        $consoleTitle | Out-File (Join-Path $sessionDir "console_title.txt") -Encoding utf8
     }
     exit 0
 }
@@ -125,20 +231,6 @@ if ($Event -eq "check") {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-Add-Type @"
-using System; using System.Runtime.InteropServices;
-public class Win32 {
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-    [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int dwProcessId);
-    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
-}
-"@
-
 try { [Win32]::SetProcessDPIAware() | Out-Null } catch {}
 
 $scale = 1.0
@@ -152,32 +244,16 @@ try {
 } catch { $scale = 1.0 }
 
 # ── Session key ──
-$stdinInput = ""
+$stdinInput = Read-HookStdin
 $hookData = $null
-$sessionSource = ""
-if ($PayloadFile -and (Test-Path -LiteralPath $PayloadFile)) {
-    try {
-        $stdinInput = Get-Content -LiteralPath $PayloadFile -Raw -Encoding UTF8
-        Remove-Item -LiteralPath $PayloadFile -Force -ErrorAction SilentlyContinue
-    } catch {}
-} elseif ([Console]::IsInputRedirected) {
-    try { $stdinInput = [Console]::In.ReadToEnd() } catch {}
-}
+$sessionSource = Resolve-SessionSource $stdinInput
 if ($stdinInput -and $stdinInput.Length -gt 0) {
     try { $hookData = $stdinInput | ConvertFrom-Json } catch {}
-    if ($hookData) {
-        if ($hookData.session_id) { $sessionSource = [string]$hookData.session_id }
-        elseif ($hookData.transcript_path) { $sessionSource = [string]$hookData.transcript_path }
-        elseif ($hookData.cwd) { $sessionSource = [string]$hookData.cwd }
-    }
 }
-if (-not $sessionSource -and $env:CLAUDE_SESSION_ID) { $sessionSource = $env:CLAUDE_SESSION_ID }
-if (-not $sessionSource) { $sessionSource = (Get-Location).Path }
 
 $sessionKey = Get-ShortHash -Value $sessionSource
 $sessionDir = Join-Path $sessionsDir $sessionKey
 if (-not (Test-Path $sessionDir)) { New-Item -ItemType Directory -Path $sessionDir -Force | Out-Null }
-$instanceTimeFile = Join-Path $sessionDir "start_time.txt"
 $instanceHandleFile = Join-Path $sessionDir "terminal_handle.txt"
 
 # ── Log source detection ──
@@ -320,52 +396,31 @@ try {
     $mutexOwned = $true
 } catch { $mutex = $null }
 
-# ── Show notification ──
-function Find-TerminalWindow {
-    $termNames = @("WindowsTerminal", "wt", "wezterm", "wezterm-gui",
-                   "ConEmu64", "ConEmu", "OpenConsole", "conhost",
-                   "pwsh", "powershell", "cmd",
-                   "idea64", "idea", "jetbrains", "devecostudio64",
-                   "code", "Code",
-                   "hyper", "alacritty", "tabby", "mintty",
-                   "FluentTerminal", "MobaXterm", "putty", "kitty")
-    # Walk parent chain to find the terminal that launched this Claude Code instance
-    $pidCursor = $global:pid
-    $seen = @{}
-    while ($pidCursor -gt 0 -and -not $seen.ContainsKey($pidCursor)) {
-        $seen[$pidCursor] = $true
-        try {
-            $proc = Get-Process -Id $pidCursor -ErrorAction SilentlyContinue
-            if ($null -ne $proc -and $proc.ProcessName -in $termNames -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
-                return $proc.MainWindowHandle
-            }
-            $wmi = Get-WmiObject Win32_Process -Filter "ProcessId = $pidCursor" -ErrorAction SilentlyContinue
-            if (-not $wmi) { break }
-            $pidCursor = $wmi.ParentProcessId
-        } catch { break }
-    }
-    # Fallback: global search for any terminal window (newest first)
-    foreach ($name in $termNames) {
-        try {
-            $proc = Get-Process -Name $name -ErrorAction SilentlyContinue |
-                Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero } |
-                Sort-Object StartTime -Descending | Select-Object -First 1
-            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { return $proc.MainWindowHandle }
-        } catch {}
-    }
-    try {
-        $consoleHwnd = [Win32]::GetConsoleWindow()
-        if ($consoleHwnd -ne [IntPtr]::Zero) { return $consoleHwnd }
-    } catch {}
-    return [IntPtr]::Zero
-}
-
+# ── Activate terminal ──
 function Activate-Terminal {
     param([string]$HandleFile)
 
     $handle = [IntPtr]::Zero
     $activeHandleFile = if ($HandleFile) { $HandleFile } else { $instanceHandleFile }
-    if (Test-Path $activeHandleFile) {
+
+    # Collect titles: live (most up-to-date) + saved (fallback if title drifted)
+    $matchTitles = @()
+    $liveTitle = ""
+    try { $liveTitle = [Console]::Title } catch {}
+    if ($liveTitle) { $matchTitles += $liveTitle }
+    $activeSessionDir = if ($HandleFile) { Split-Path $HandleFile -Parent } else { $sessionDir }
+    $titleFile = Join-Path $activeSessionDir "console_title.txt"
+    if (Test-Path $titleFile) {
+        try {
+            $savedTitle = (Get-Content $titleFile -Raw).Trim()
+            if ($savedTitle -and $savedTitle -ne $liveTitle) { $matchTitles += $savedTitle }
+        } catch {}
+    }
+
+    $handle = Find-WtWindowByTitle -Titles $matchTitles
+
+    # Fallback: saved handle
+    if ($handle -eq [IntPtr]::Zero -and (Test-Path $activeHandleFile)) {
         try {
             $handleStr = (Get-Content $activeHandleFile -Raw).Trim()
             $savedHandle = [long]0
@@ -377,19 +432,36 @@ function Activate-Terminal {
     if ($handle -eq [IntPtr]::Zero) { $handle = Find-TerminalWindow }
     if ($handle -ne [IntPtr]::Zero) {
         try {
-            $procId = [uint32]0
-            [Win32]::GetWindowThreadProcessId($handle, [ref]$procId) | Out-Null
-            if ($procId -gt 0) {
-                [Win32]::AllowSetForegroundWindow([int]$procId) | Out-Null
-                try { $wshell = New-Object -ComObject WScript.Shell; $wshell.AppActivate($procId) | Out-Null } catch {}
-            }
             $isMinimized = [Win32]::IsIconic($handle)
             if ($isMinimized) { [Win32]::ShowWindow($handle, 9) | Out-Null }
+
+            $procId = [uint32]0
+            [Win32]::GetWindowThreadProcessId($handle, [ref]$procId) | Out-Null
+            $fgHandle = [Win32]::GetForegroundWindow()
+            $fgProcId = [uint32]0
+            $fgThreadId = [Win32]::GetWindowThreadProcessId($fgHandle, [ref]$fgProcId)
+            $curThreadId = [Win32]::GetCurrentThreadId()
+            $attached = $false
+            if ($fgThreadId -ne 0 -and $fgThreadId -ne $curThreadId) {
+                try { $attached = [Win32]::AttachThreadInput($curThreadId, $fgThreadId, $true) } catch {}
+            }
+            try {
+                $wshell = New-Object -ComObject WScript.Shell
+                $wshell.SendKeys("%")
+            } catch {}
+
             [Win32]::SetForegroundWindow($handle) | Out-Null
+            try { $wshell = New-Object -ComObject WScript.Shell; $wshell.AppActivate($procId) | Out-Null } catch {}
+            [Win32]::ShowWindow($handle, 5) | Out-Null
+
+            if ($attached) {
+                try { [Win32]::AttachThreadInput($curThreadId, $fgThreadId, $false) | Out-Null } catch {}
+            }
         } catch {}
     }
 }
 
+# ── Show notification ──
 function Show-Notify {
     $screen = $null
     try {
@@ -446,7 +518,8 @@ function Show-Notify {
     $appLb.Location = New-Object System.Drawing.Point($padX, [int](8 * $scale))
     $appLb.Size = New-Object System.Drawing.Size([int](270 * $scale), [int](44 * $scale))
     $appLb.TextAlign = "MiddleLeft"; $appLb.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $appLb.Add_Click({ $script:balloonClosed = $true; Activate-Terminal })
+    $script:activateAfterClose = $false
+    $appLb.Add_Click({ $script:balloonClosed = $true; $script:activateAfterClose = $true })
     $f.Controls.Add($appLb)
 
     $msgLb = New-Object System.Windows.Forms.Label
@@ -456,7 +529,7 @@ function Show-Notify {
     $msgLb.Location = New-Object System.Drawing.Point($padX, [int](52 * $scale))
     $msgLb.Size = New-Object System.Drawing.Size([int](270 * $scale), [int](36 * $scale))
     $msgLb.TextAlign = "TopLeft"; $msgLb.Cursor = [System.Windows.Forms.Cursors]::Hand
-    $msgLb.Add_Click({ $script:balloonClosed = $true; Activate-Terminal })
+    $msgLb.Add_Click({ $script:balloonClosed = $true; $script:activateAfterClose = $true })
     $f.Controls.Add($msgLb)
 
     $closeLb = New-Object System.Windows.Forms.Label
@@ -469,7 +542,7 @@ function Show-Notify {
     $closeLb.Add_Click({ $script:balloonClosed = $true })
     $f.Controls.Add($closeLb)
 
-    $f.Add_Click({ $script:balloonClosed = $true; Activate-Terminal })
+    $f.Add_Click({ $script:balloonClosed = $true; $script:activateAfterClose = $true })
 
     $script:balloonClosed = $false
     $tm = New-Object System.Windows.Forms.Timer
@@ -482,6 +555,7 @@ function Show-Notify {
     if (-not $f.IsDisposed) { $f.Close() }
     if (-not $shadow.IsDisposed) { $shadow.Close() }
     $f.Dispose(); $shadow.Dispose()
+    if ($script:activateAfterClose) { Activate-Terminal }
 }
 
 function Show-Popup {
@@ -543,11 +617,12 @@ function Show-Popup {
     $bp.AddArc(($bw - $br), ($bh - $br), $br, $br, 0, 90); $bp.AddArc(0, ($bh - $br), $br, $br, 90, 90)
     $bp.CloseFigure(); $btn.Region = New-Object System.Drawing.Region($bp)
 
-    $btn.Add_Click({ Activate-Terminal; $f.Close() })
+    $btn.Add_Click({ $script:popupActivate = $true; $f.Close() })
     $f.Controls.Add($btn)
 
     $f.ShowDialog() | Out-Null
     $f.Dispose()
+    if ($script:popupActivate) { Activate-Terminal }
 }
 
 try {

@@ -17,7 +17,7 @@ when a task completes.
 ## Features
 
 - **Permission popup** — centered window with tool name/args and a "确定" button
-- **Task completion toast** — 5-second balloon in the bottom-right corner
+- **Task completion toast** — 5-second balloon in the top-right corner
 - **Terminal activation** — click the notification to bring your terminal back to the foreground
 - **Multisession isolation** — separate state tracking per Claude Code session
 - **DPI-aware** — renders correctly on HiDPI displays
